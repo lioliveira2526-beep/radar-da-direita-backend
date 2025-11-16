@@ -1,0 +1,17 @@
+[
+  {
+    "articleId":"premium-001",
+    "title":"Radar: Análise Exclusiva — Segurança Nacional",
+    "subtitle":"Relatório da equipe Radar sobre riscos e respostas.",
+    "authors":["Equipe RADAR"],
+    "publicationDate":"2025-11-01T08:00:00Z",
+    "category":"Análise",
+    "summary":"Relatório resumido sobre segurança nacional.",
+    "contentHtml":"<p>Conteúdo premium do Radar.</p>",
+    "isPremium":true,
+    "isFeatured":true,
+    "imagePlaceholderUrl":"",
+    "analysisTags":["Segurança"],
+    "source":{"name":"Radar","url":""}
+  }
+]
