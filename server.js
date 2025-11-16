@@ -27,23 +27,46 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "troque_por_token_forte_aqui";
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || "";
 
 const parser = new Parser({ timeout: 10000 });
-const cache = new NodeCache({ stdTTL: CACHE_TTL_SECONDS, checkperiod: Math.max(60, Math.floor(CACHE_TTL_SECONDS/2)) });
+const cache = new NodeCache({
+  stdTTL: CACHE_TTL_SECONDS,
+  checkperiod: Math.max(60, Math.floor(CACHE_TTL_SECONDS / 2))
+});
 
 let feeds = [];
 let seedArticles = [];
 
-// load static files
-try { feeds = JSON.parse(fs.readFileSync(FEEDS_FILE, "utf8")); } catch(e){ feeds = []; console.warn("feeds.json missing or invalid"); }
-try { seedArticles = JSON.parse(fs.readFileSync(SEED_FILE, "utf8")); } catch(e){ seedArticles = []; console.warn("seed/articles.json missing or invalid"); }
+// Load static files
+try {
+  feeds = JSON.parse(fs.readFileSync(FEEDS_FILE, "utf8"));
+} catch (e) {
+  feeds = [];
+  console.warn("feeds.json missing or invalid");
+}
 
-// helpers
-function nowISO(){ return new Date().toISOString(); }
-function makeArticleId(prefix, input){ return `${prefix}-${Buffer.from(String(input)).toString('base64').slice(0,12)}`; }
-function sanitizeText(s){ return (s||"").toString().trim(); }
+try {
+  seedArticles = JSON.parse(fs.readFileSync(SEED_FILE, "utf8"));
+} catch (e) {
+  seedArticles = [];
+  console.warn("seed/articles.json missing or invalid");
+}
 
-// Map RSS item -> article schema
-function mapRssItem(item, feedName){
+// Helpers
+function nowISO() {
+  return new Date().toISOString();
+}
+
+function makeArticleId(prefix, input) {
+  return `${prefix}-${Buffer.from(String(input)).toString("base64").slice(0, 12)}`;
+}
+
+function sanitizeText(s) {
+  return (s || "").toString().trim();
+}
+
+// Map RSS item → internal structure
+function mapRssItem(item, feedName) {
   const id = makeArticleId("rss", item.link || item.guid || item.title || uuidv4());
+
   return {
     articleId: id,
     title: sanitizeText(item.title || "Sem título"),
@@ -61,28 +84,40 @@ function mapRssItem(item, feedName){
   };
 }
 
-// filter relevance: política only
-function isRelevantPolitics(text, feedName=""){
-  if(!text) return false;
+// Filter relevance (politics only)
+function isRelevantPolitics(text, feedName = "") {
+  if (!text) return false;
   const t = text.toLowerCase();
-  const block = ["futebol","esporte","entretenimento","receita","celebridade","tv","cinema"];
-  for(const b of block) if(t.includes(b)) return false;
-  const allow = ["política","politica","governo","congresso","senado","deputado","eleição","eleicao","partido","reforma","tributaria","guerra","geopolít","geopolit","economia","segurança","seguranca"];
-  if(allow.some(k => t.includes(k))) return true;
-  if(/politica|poder|congresso|senado/i.test(feedName)) return true;
+
+  const block = ["futebol", "esporte", "entretenimento", "receita", "celebridade", "tv", "cinema"];
+  for (const b of block) if (t.includes(b)) return false;
+
+  const allow = [
+    "política", "politica", "governo", "congresso", "senado",
+    "deputado", "eleição", "eleicao", "partido", "reforma", "tributaria",
+    "guerra", "geopolít", "geopolit", "economia", "segurança", "seguranca"
+  ];
+
+  if (allow.some(k => t.includes(k))) return true;
+  if (/politica|poder|congresso|senado/i.test(feedName)) return true;
+
   return false;
 }
 
-async function fetchNewsFromNewsAPI(){
-  if(!NEWSAPI_KEY) return [];
-  try{
+// Fetch optional NewsAPI
+async function fetchNewsFromNewsAPI() {
+  if (!NEWSAPI_KEY) return [];
+
+  try {
     const q = "política OR politica OR governo OR congresso OR eleicao OR eleição OR geopolítica OR guerra";
+
     const res = await axios.get("https://newsapi.org/v2/top-headlines", {
       params: { country: "br", q, pageSize: 50 },
       headers: { "X-Api-Key": NEWSAPI_KEY },
       timeout: 10000
     });
-    const items = (res.data.articles || []).map(a => ({
+
+    return (res.data.articles || []).map(a => ({
       articleId: makeArticleId("newsapi", a.url || a.title || uuidv4()),
       title: sanitizeText(a.title),
       subtitle: sanitizeText(a.description || ""),
@@ -97,115 +132,147 @@ async function fetchNewsFromNewsAPI(){
       analysisTags: [],
       source: { name: a.source?.name || "NewsAPI", url: a.url || "" }
     }));
-    return items;
-  }catch(e){
+  } catch (e) {
     console.warn("NewsAPI fetch failed:", e.message || e);
     return [];
   }
 }
 
-async function fetchAndAggregate(){
+// Aggregate everything
+async function fetchAndAggregate() {
   const cacheKey = "aggregated_news_v1";
   const cached = cache.get(cacheKey);
-  if(cached) return cached;
+  if (cached) return cached;
 
   let all = [];
 
-  // 1) RSS feeds
-  for(const f of feeds){
-    try{
+  // RSS feeds
+  for (const f of feeds) {
+    try {
       const feed = await parser.parseURL(f.url);
       const sourceName = f.name || feed.title || "Fonte";
-      for(const it of (feed.items || [])){
+
+      for (const it of feed.items || []) {
         const mapped = mapRssItem(it, sourceName);
         const text = (mapped.title + " " + mapped.summary).toLowerCase();
-        if(isRelevantPolitics(text, sourceName)) all.push(mapped);
+        if (isRelevantPolitics(text, sourceName)) all.push(mapped);
       }
-    } catch(e){
+    } catch (e) {
       console.warn("Fail parse feed:", f.url, e.message || e);
     }
   }
 
-  // 2) NewsAPI augment (optional)
+  // Optional NewsAPI
   const fromNewsApi = await fetchNewsFromNewsAPI();
-  if(fromNewsApi.length) all.push(...fromNewsApi);
+  if (fromNewsApi.length) all.push(...fromNewsApi);
 
-  // dedupe by title + source
+  // Dedup
   const seen = new Set();
   const dedup = [];
-  for(const a of all){
-    const key = (a.title||"") + "|" + (a.source?.name||"");
-    if(!seen.has(key)){
+
+  for (const a of all) {
+    const key = `${a.title}|${a.source?.name}`;
+    if (!seen.has(key)) {
       seen.add(key);
       dedup.push(a);
     }
   }
 
-  // merge seed premium on top
+  // Merge seed premium
   const merged = [...seedArticles.filter(s => s.isFeatured), ...dedup];
-  merged.sort((x,y) => new Date(y.publicationDate || 0) - new Date(x.publicationDate || 0));
+  merged.sort((x, y) => new Date(y.publicationDate) - new Date(x.publicationDate));
 
   cache.set(cacheKey, merged);
   return merged;
 }
 
-// periodic refresh loop
-async function refreshLoop(){
-  try{
+// Periodic refresh loop
+async function refreshLoop() {
+  try {
     await fetchAndAggregate();
-  }catch(e){ console.error("refreshLoop error", e.message || e); }
+  } catch (e) {
+    console.error("refreshLoop error", e.message || e);
+  }
   setTimeout(refreshLoop, CACHE_TTL_SECONDS * 1000);
 }
-fetchAndAggregate().then(()=>setTimeout(refreshLoop, CACHE_TTL_SECONDS * 1000)).catch(()=>setTimeout(refreshLoop, CACHE_TTL_SECONDS * 1000));
 
-// Endpoints
-app.get("/api/health", (req,res)=>res.json({ ok:true, now: nowISO() }));
+fetchAndAggregate()
+  .then(() => setTimeout(refreshLoop, CACHE_TTL_SECONDS * 1000))
+  .catch(() => setTimeout(refreshLoop, CACHE_TTL_SECONDS * 1000));
 
-app.get("/api/news", async (req,res)=>{
-  try{
+// ENDPOINTS ==============================
+
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, now: nowISO() });
+});
+
+app.get("/api/news", async (req, res) => {
+  try {
     const page = Math.max(1, Number(req.query.page || 1));
     const pageSize = Math.min(100, Number(req.query.pageSize || 30));
+
     const all = await fetchAndAggregate();
-    const start = (page-1)*pageSize;
-    const items = all.slice(start, start+pageSize);
-    res.json({ total: all.length, page, pageSize, items });
-  }catch(e){ res.status(500).json({ error: "failed" }); }
-});
+    const start = (page - 1) * pageSize;
 
-app.get("/api/search", async (req,res)=>{
-  try{
-    const q = (req.query.q || "").trim().toLowerCase();
-    if(!q) return res.json([]);
-    const all = await fetchAndAggregate();
-    const found = all.filter(a => ((a.title + " " + (a.summary||"")).toLowerCase().includes(q)));
-    res.json(found.slice(0,200));
-  }catch(e){ res.status(500).json({ error: "search failed" }); }
-});
-
-app.get("/api/categories", (req,res)=> res.json(["Política","Geopolítica","Análise"]));
-
-app.get("/api/premium", (req,res)=> res.json(seedArticles));
-
-app.get("/api/articles/:id", (req,res)=>{
-  const id = req.params.id;
-  const all = [...seedArticles];
-  const found = all.find(x=>x.articleId === id);
-  if(!found) return res.status(404).json({ error: "not found" });
-  res.json(found);
-});
-
-// Admin refresh
-app.post("/api/admin/refresh", async (req,res)=>{
-  const token = req.headers['x-admin-token'] || req.query.token || "";
-  if(token !== ADMIN_TOKEN) return res.status(401).json({ error: "unauthorized" });
-  try{
-    cache.del("aggregated_news_v1");
-    const data = await fetchAndAggregate();
-    return res.json({ ok:true, total: data.length, sample: data.slice(0,8) });
-  }catch(e){
-    console.error("admin refresh fail", e);
-    return res.status(500).json({ error: "refresh failed" });
+    res.json({
+      total: all.length,
+      page,
+      pageSize,
+      items: all.slice(start, start + pageSize)
+    });
+  } catch (e) {
+    res.status(500).json({ error: "failed" });
   }
 });
 
-app.listen(PORT, ()=>console.log(`RADAR backend listening on ${PORT}`));
+app.get("/api/search", async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim().toLowerCase();
+    if (!q) return res.json([]);
+
+    const all = await fetchAndAggregate();
+    const found = all.filter(a =>
+      (a.title + " " + (a.summary || "")).toLowerCase().includes(q)
+    );
+
+    res.json(found.slice(0, 200));
+  } catch (e) {
+    res.status(500).json({ error: "search failed" });
+  }
+});
+
+app.get("/api/categories", (req, res) =>
+  res.json(["Política", "Geopolítica", "Análise"])
+);
+
+app.get("/api/premium", (req, res) => res.json(seedArticles));
+
+app.get("/api/articles/:id", (req, res) => {
+  const id = req.params.id;
+  const all = [...seedArticles];
+
+  const found = all.find(x => x.articleId === id);
+  if (!found) return res.status(404).json({ error: "not found" });
+
+  res.json(found);
+});
+
+app.post("/api/admin/refresh", async (req, res) => {
+  const token = req.headers["x-admin-token"] || req.query.token || "";
+  if (token !== ADMIN_TOKEN)
+    return res.status(401).json({ error: "unauthorized" });
+
+  try {
+    cache.del("aggregated_news_v1");
+    const data = await fetchAndAggregate();
+    res.json({ ok: true, total: data.length, sample: data.slice(0, 8) });
+  } catch (e) {
+    console.error("admin refresh fail", e);
+    res.status(500).json({ error: "refresh failed" });
+  }
+});
+
+// START SERVER ============================
+app.listen(PORT, () => {
+  console.log(`RADAR backend listening on port ${PORT}`);
+});
