@@ -1,0 +1,9 @@
+[
+  {"name":"G1 Política","url":"https://g1.globo.com/rss/g1/politica/"},
+  {"name":"Folha - Poder","url":"https://feeds.folha.uol.com.br/poder/rss091.xml"},
+  {"name":"Estadão - Política","url":"https://www.estadao.com.br/politica/feed/"},
+  {"name":"UOL - Política","url":"https://noticias.uol.com.br/politica/ultimas-noticias/rss.xml"},
+  {"name":"O Globo - Política","url":"https://oglobo.globo.com/rss/politica.xml"},
+  {"name":"Gazeta do Povo - Política","url":"https://www.gazetadopovo.com.br/politica/feed/"},
+  {"name":"O Antagonista","url":"https://www.oantagonista.com/feed/"}
+]
